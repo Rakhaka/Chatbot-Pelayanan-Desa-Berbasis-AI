@@ -63,6 +63,16 @@ function cleanSessionFolder() {
     }
 }
 
+// =====================================================================
+// Chat History (Short-Term Memory) & Initialization Guards
+// =====================================================================
+const chatHistories = new Map();
+const MAX_HISTORY_LENGTH = 8; // Batasi ingatan maksimal 8 pesan (4 tanya-jawab) untuk hemat RAM & Token
+
+let isInitializing = false;
+let isInitialized = false;
+let isRestarting = false;
+
 const client = new Client({
     authStrategy: new LocalAuth({
         clientId: "mannx-bot",
@@ -71,20 +81,40 @@ const client = new Client({
     puppeteer: {
         headless: true,
         args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-accelerated-2d-canvas",
-            "--no-first-run",
-            "--no-zygote",
-            "--disable-gpu",
-            "--dns-prefetch-disable",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--single-process',
+            '--disable-gpu',
+            '--disable-dev-shm-usage',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding'
         ],
     },
 });
 
-let isRestarting = false;
+async function initializeClient() {
+    if (isInitializing) {
+        console.warn("[Bot] ⚠️ WhatsApp Client sedang dalam proses inisialisasi. Mengabaikan...");
+        return false;
+    }
+    if (isInitialized) {
+        console.warn("[Bot] ⚠️ WhatsApp Client sudah aktif. Mengabaikan...");
+        return false;
+    }
+
+    isInitializing = true;
+    try {
+        await client.initialize();
+        isInitialized = true;
+        isInitializing = false;
+        return true;
+    } catch (err) {
+        isInitializing = false;
+        isInitialized = false;
+        throw err;
+    }
+}
 
 async function closeBrowserPages(browser) {
     if (!browser?.pages) return;
@@ -101,6 +131,8 @@ async function waitForBrowserDisconnect(browser, timeoutMs = BROWSER_CLOSE_TIMEO
 }
 
 async function destroyClientSafely() {
+    isInitializing = false;
+    isInitialized = false;
     const browser = client.pupBrowser;
 
     try {
@@ -158,6 +190,8 @@ client.on("authenticated", () => {
 
 client.on("ready", () => {
     isRestarting = false;
+    isInitializing = false;
+    isInitialized = true;
     console.log("[Bot] ✅ WhatsApp Client siap! Bot aktif dan siap membalas pesan.");
     state.setBotStatus("online");
 });
@@ -200,7 +234,7 @@ client.on("disconnected", async (reason) => {
 function restartBot() {
     console.log("[Bot] 🔄 Memulai ulang koneksi WhatsApp...");
     state.setBotStatus("loading");
-    client.initialize().catch((err) => {
+    initializeClient().catch((err) => {
         if (err.message?.includes("already running")) {
             console.warn("[Bot] ⚠️ Browser masih berjalan dari sesi lama. Menunggu 15 detik lagi...");
             isRestarting = true;
@@ -219,6 +253,46 @@ function restartBot() {
     });
 }
 
+// =====================================================================
+// Chat History Helper Functions
+// =====================================================================
+function addMessageToHistory(userId, role, text) {
+    if (!chatHistories.has(userId)) {
+        chatHistories.set(userId, []);
+    }
+    const history = chatHistories.get(userId);
+    history.push({ role, parts: [{ text }] });
+
+    // Gabungkan pesan berurutan dengan role sama & pastikan riwayat dimulai dengan 'user'
+    const sanitized = [];
+    for (const msg of history) {
+        if (sanitized.length === 0) {
+            if (msg.role === "user") {
+                sanitized.push({ role: msg.role, parts: [{ text: msg.parts[0].text }] });
+            }
+            continue;
+        }
+        const lastMsg = sanitized[sanitized.length - 1];
+        if (lastMsg.role === msg.role) {
+            lastMsg.parts[0].text += "\n" + msg.parts[0].text;
+        } else {
+            sanitized.push({ role: msg.role, parts: [{ text: msg.parts[0].text }] });
+        }
+    }
+
+    // Batasi panjang riwayat maksimal MAX_HISTORY_LENGTH
+    while (sanitized.length > MAX_HISTORY_LENGTH) {
+        sanitized.shift();
+    }
+
+    // Pastikan riwayat setelah pemotongan tetap diawali dengan "user"
+    while (sanitized.length > 0 && sanitized[0].role !== "user") {
+        sanitized.shift();
+    }
+
+    chatHistories.set(userId, sanitized);
+}
+
 client.on("message", async (message) => {
     try {
         if (message.isGroup || message.from.includes("@g.us")) return;
@@ -233,6 +307,9 @@ client.on("message", async (message) => {
         if (!body) return;
 
         console.log(`[Bot] 💬 Pesan dari ${message.from}: "${body}"`);
+
+        // Tambahkan pesan user ke riwayat
+        addMessageToHistory(message.from, "user", body);
 
         const knowledgeText = readKnowledgeText();
         const currentLocalTime = new Date().toLocaleString("id-ID", {
@@ -272,9 +349,10 @@ ${knowledgeText}`;
 
         for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
+                const chatHistory = chatHistories.get(message.from) || [];
                 const result = await Promise.race([
                     model.generateContent({
-                        contents: [{ role: "user", parts: [{ text: body }] }],
+                        contents: chatHistory,
                         generationConfig: {
                             maxOutputTokens: 1000,
                             temperature: 0.3
@@ -296,6 +374,8 @@ ${knowledgeText}`;
         }
 
         if (replyText) {
+            // Tambahkan balasan model ke riwayat
+            addMessageToHistory(message.from, "model", replyText);
             await message.reply(replyText);
             console.log(`[Bot] ✅ Balasan terkirim ke ${message.from}`);
         } else {
@@ -323,7 +403,7 @@ function initializeBot() {
     isRestarting = false;
     state.setBotStatus("loading");
     console.log("[Bot] 🔄 Menginisialisasi WhatsApp Client...");
-    client.initialize().catch((err) => {
+    initializeClient().catch((err) => {
         console.error("[Bot] ❌ Inisialisasi pertama gagal:", err.message);
         state.setBotStatus("offline");
     });
