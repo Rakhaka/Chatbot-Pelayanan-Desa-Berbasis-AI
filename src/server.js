@@ -150,9 +150,15 @@ io.on('connection', (socket) => {
 });
 
 function startServer() {
-    const PORT = process.env.PORT || 3000;
-    server.listen(PORT, () => {
-        console.log(`🚀 Web Dashboard server berjalan di http://localhost:${PORT}`);
+    return new Promise((resolve, reject) => {
+        const PORT = process.env.PORT || 3000;
+        server.listen(PORT, () => {
+            console.log(`🚀 Web Dashboard server berjalan di http://localhost:${PORT}`);
+            resolve();
+        });
+        server.on('error', (err) => {
+            reject(err);
+        });
     });
 }
 
