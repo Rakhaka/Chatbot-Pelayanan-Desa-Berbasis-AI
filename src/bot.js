@@ -72,6 +72,7 @@ const MAX_HISTORY_LENGTH = 8; // Batasi ingatan maksimal 8 pesan (4 tanya-jawab)
 let isInitializing = false;
 let isInitialized = false;
 let isRestarting = false;
+let io = null;
 
 const client = new Client({
     authStrategy: new LocalAuth({
@@ -186,6 +187,7 @@ client.on("loading_screen", (percent, message) => {
 
 client.on("authenticated", () => {
     console.log("[Bot] 🔐 Autentikasi berhasil. Menunggu WhatsApp siap...");
+    state.setBotStatus("loading");
 });
 
 client.on("ready", () => {
@@ -399,7 +401,9 @@ ${knowledgeText}`;
     }
 });
 
-function initializeBot() {
+function initializeBot(socketIoParam) {
+    io = socketIoParam;
+    state.io = io; // pastikan state.io terisi
     isRestarting = false;
     state.setBotStatus("loading");
     console.log("[Bot] 🔄 Menginisialisasi WhatsApp Client...");

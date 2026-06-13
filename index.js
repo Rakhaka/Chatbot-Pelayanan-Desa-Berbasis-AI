@@ -10,9 +10,9 @@ console.log('===================================================');
 // 1. Jalankan Web Dashboard Express & Socket.io Server
 async function main() {
     try {
-        await startServer();
+        const { io } = await startServer();
         // 2. Jalankan WhatsApp Client & Gemini AI Bot Engine (di latar belakang setelah server aktif)
-        initializeBot();
+        initializeBot(io);
     } catch (err) {
         console.error('❌ Gagal mengaktifkan server utama:', err);
         process.exit(1);

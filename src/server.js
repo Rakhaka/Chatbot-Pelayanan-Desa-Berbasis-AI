@@ -15,7 +15,12 @@ const { readKnowledgeText, writeKnowledgeJson } = require('./knowledge');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server);
+const io = socketIo(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
 
 state.io = io;
 
@@ -154,7 +159,18 @@ function startServer() {
         const PORT = process.env.PORT || 3000;
         server.listen(PORT, () => {
             console.log(`🚀 Web Dashboard server berjalan di http://localhost:${PORT}`);
-            resolve();
+            
+            // Heartbeat: Sinkronisasi status Socket.IO ke frontend secara berkala setiap 5 detik
+            setInterval(() => {
+                if (state.io) {
+                    state.io.emit('bot_status', {
+                        status: state.botStatus,
+                        qr: state.qrCode
+                    });
+                }
+            }, 5000);
+
+            resolve({ server, io });
         });
         server.on('error', (err) => {
             reject(err);

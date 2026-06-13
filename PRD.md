@@ -6,10 +6,10 @@ Membangun ulang sistem chatbot WhatsApp pelayanan desa dari arsitektur *rule-bas
 ## 2. Tech Stack
 * **Backend:** Node.js, Express.js
 * **WhatsApp Client:** `whatsapp-web.js`
-* **AI Engine:** `@google/generative-ai` (Model: `gemini-1.5-flash`)
-* **Real-time Comms:** `socket.io` (untuk mengirim QR Code ke web)
+* **AI Engine:** `@google/generative-ai` (Bisa menggunakan berbagai versi model seperti `gemini-1.5-flash` / `gemini-3.1-flash-lite`)
+* **Real-time Comms:** `socket.io` (Telah dilengkapi *Heartbeat Sync* 5-detik untuk mencegah UI stuck)
 * **Frontend (Dashboard):** HTML, CSS (Tailwind CSS via CDN agar ringan), Vanilla JavaScript.
-* **Authentication:** Session-based / Basic Auth (Hardcoded).
+* **Authentication:** `express-session` dengan Basic Auth (Hardcoded).
 
 ## 3. Aturan Refactoring Data (PENTING UNTUK AI AGENT)
 Sistem lama menggunakan banyak file `.js` (di folder `FasilitasDesa`, `LayananAdmin`, `StrukturData`) yang mengekspor *string* teks berformat. 
@@ -37,9 +37,9 @@ Sistem lama menggunakan banyak file `.js` (di folder `FasilitasDesa`, `LayananAd
 * Jika sesi belum ada, tangkap *event* `qr` dari `whatsapp-web.js`, ubah ke *base64 image*, dan kirim ke *frontend* via `socket.io` secara *real-time*.
 * Admin tinggal *scan* QR dari layar HP/Laptop.
 
-### D. Web Dashboard - Bot Control & Knowledge Manager
+### D. Web Dashboard - Bot Control & AI-Driven Knowledge Manager
 * **Toggle Switch:** Tombol untuk *Start / Stop* respon AI. Jika *Stop*, bot tidak membalas pesan apapun (agar admin manusia bisa mengambil alih).
-* **Data Editor:** Sebuah *Textarea* besar yang memuat isi `knowledge.json` atau `context.txt`. Admin bisa mengedit jam buka, nama kades, atau layanan di sini. Saat klik "Simpan", timpa file lama. AI otomatis akan menggunakan data terbaru di *chat* berikutnya.
+* **AI-Driven Data Update:** Berbeda dengan konsep editor text biasa, admin kini cukup mengetik instruksi dalam bahasa manusia (contoh: "Ubah nama kepala desa menjadi Bapak Irawan"). Gemini API akan memproses dan merestrukturisasi JSON secara otomatis (`knowledge.json`) di balik layar. AI Chatbot seketika akan menggunakan versi data terbaru ini pada percakapan dengan warga.
 
 ## 5. UI/UX & Styling Guidelines
 Desain harus **Mobile-First** (responsif, elemen tidak tumpang tindih di layar HP), *clean*, ringan (tanpa banyak *library* eksternal), dan profesional khas layanan pemerintahan desa.
@@ -66,23 +66,18 @@ Silakan bentuk struktur direktori sebersih ini:
 │
 ├── /src
 │   ├── bot.js               # Logic whatsapp-web.js dan Gemini API
-│   └── server.js            # Express.js server, Auth logic, Webhook/Routes
+│   ├── server.js            # Express.js server, Auth logic, Webhook/Routes
+│   ├── state.js             # Event Emitter untuk state (botStatus, dll)
+│   ├── gemini.js            # Konfigurasi model dan fungsi utilitas Gemini
+│   └── knowledge.js         # Pengelola Read/Write file data/knowledge.json
 │
 ├── .env                     # Simpan GEMINI_API_KEY di sini
 ├── package.json
-└── index.js                 # Entry point (menjalankan server.js dan bot.js)
+└── index.js                 # Entry point (menjalankan server.js dan bot.js bersamaan)
 
-7. Langkah Eksekusi (AI Agent Action Plan)
-Inisialisasi proyek dan instalasi dependensi dasar (express, whatsapp-web.js, socket.io, @google/generative-ai, dotenv, qrcode).
-
-Buat struktur folder sesuai panduan di atas.
-
-Rangkum kode statis lama dari strukturPerangkat.js dll. menjadi data/knowledge.json.
-
-Bangun src/server.js untuk melayani file statis, menangani Login hardcoded, dan menyediakan API internal untuk merubah data.
-
-Bangun src/bot.js yang mengintegrasikan WA dan Gemini dengan System Prompt dinamis (menyertakan waktu real-time).
-
-Sambungkan bot.js dan server.js menggunakan Socket.io untuk transmisi QR Code.
-
-Bangun frontend menggunakan Tailwind CSS di /public.
+## 7. Status Saat Ini (Current State)
+Seluruh fitur yang direncanakan telah berhasil dibangun dan diintegrasikan:
+1. Sesi WhatsApp stabil dengan sistem Auto-Reconnect dari `whatsapp-web.js`.
+2. Express Server & Socket.io tersinkronisasi mulus dengan lifecycle WhatsApp berkat implementasi `state.js` sebagai jembatan *event-emitter*.
+3. Kendala UI Web Dashboard yang sebelumnya sering "*stuck*" telah dituntaskan menggunakan mekanisme *Heartbeat Sinkronisasi 5-detik* pada `server.js`.
+4. Fitur *Toggle Auto-Respon* dan *AI-Driven Data Update* sukses beroperasi menggunakan `gemini.js`, memungkinkan pembaruan basis data desa yang instan, responsif, dan semudah memberikan perintah biasa.
