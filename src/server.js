@@ -12,7 +12,6 @@ const {
     extractJsonFromGeminiResponse
 } = require('./gemini');
 const { readKnowledgeText, writeKnowledgeJson } = require('./knowledge');
-const { logoutAndRestart } = require('./bot');
 
 const app = express();
 const server = http.createServer(app);
@@ -69,16 +68,6 @@ app.post('/api/logout', (req, res) => {
         res.clearCookie('connect.sid');
         return res.json({ success: true });
     });
-});
-
-app.post('/api/logout-wa', requireAuth, async (req, res) => {
-    try {
-        await logoutAndRestart();
-        res.json({ success: true, message: 'Proses logout WhatsApp sedang berjalan.' });
-    } catch (err) {
-        console.error('Error saat logout WhatsApp:', err);
-        res.status(500).json({ error: 'Gagal melakukan logout WhatsApp.' });
-    }
 });
 
 app.get('/api/status', requireAuth, (req, res) => {
