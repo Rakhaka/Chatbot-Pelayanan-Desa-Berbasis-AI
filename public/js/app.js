@@ -19,6 +19,7 @@ const statusBadge = document.getElementById('status-badge');
 const statusDesc = document.getElementById('status-desc');
 const qrContainer = document.getElementById('qr-container');
 const qrImage = document.getElementById('qr-image');
+const logoutWaBtn = document.getElementById('logout-wa-btn');
 
 // Komponen Kontrol AI
 const aiToggle = document.getElementById('ai-toggle');
@@ -163,6 +164,8 @@ function updateBotStatusUI(status, qrData = '') {
         statusDesc.innerText = 'WhatsApp Bot aktif dan siap melayani chat warga.';
         qrContainer.classList.add('hidden');
         qrImage.src = '';
+        logoutWaBtn.classList.remove('hidden');
+        logoutWaBtn.classList.add('flex');
     } 
     else if (status === 'qr') {
         // QR Code: Amber/Yellow
@@ -181,6 +184,8 @@ function updateBotStatusUI(status, qrData = '') {
         } else {
             qrContainer.classList.add('hidden');
         }
+        logoutWaBtn.classList.remove('hidden');
+        logoutWaBtn.classList.add('flex');
     } 
     else if (status === 'loading') {
         // Loading: Blue
@@ -193,6 +198,8 @@ function updateBotStatusUI(status, qrData = '') {
         statusDesc.innerText = 'Membuka sesi WhatsApp dan menyiapkan sistem...';
         qrContainer.classList.add('hidden');
         qrImage.src = '';
+        logoutWaBtn.classList.add('hidden');
+        logoutWaBtn.classList.remove('flex');
     } 
     else {
         // Offline / Error: Red
@@ -205,8 +212,31 @@ function updateBotStatusUI(status, qrData = '') {
         statusDesc.innerText = 'WhatsApp Bot terputus dari server atau sesi tidak aktif.';
         qrContainer.classList.add('hidden');
         qrImage.src = '';
+        logoutWaBtn.classList.remove('hidden');
+        logoutWaBtn.classList.add('flex');
     }
 }
+
+// Handler Logout WA
+logoutWaBtn.addEventListener('click', async () => {
+    if (!confirm('Apakah Anda yakin ingin memutuskan WhatsApp saat ini? Anda harus scan QR code ulang setelahnya.')) return;
+    
+    showLoading(true, 'Memutuskan koneksi WhatsApp...');
+    try {
+        const response = await fetch('/api/logout-wa', { method: 'POST' });
+        const data = await response.json();
+        if (response.ok && data.success) {
+            // UI akan terupdate via socket event
+        } else {
+            alert(data.error || 'Gagal memutuskan WhatsApp.');
+        }
+    } catch (err) {
+        console.error('Error logout WA:', err);
+        alert('Gagal menghubungi server.');
+    } finally {
+        showLoading(false);
+    }
+});
 
 // --- Kontrol AI Toggle Switch ---
 aiToggle.addEventListener('change', async function() {
