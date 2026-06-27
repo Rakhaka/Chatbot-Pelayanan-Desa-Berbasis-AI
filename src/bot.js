@@ -75,25 +75,28 @@ let isInitialized = false;
 let isRestarting = false;
 let readyWatchdog = null;
 let io = null;
+let client = null;
 
-const client = new Client({
-    authStrategy: new LocalAuth({
-        clientId: "mannx-bot",
-        dataPath: "./.wwebjs_auth"
-    }),
-    puppeteer: {
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-gpu',
-            '--disable-dev-shm-usage',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding'
-        ],
-    },
-});
+function createClient() {
+    return new Client({
+        authStrategy: new LocalAuth({
+            clientId: "mannx-bot",
+            dataPath: "./.wwebjs_auth"
+        }),
+        puppeteer: {
+            headless: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-gpu',
+                '--disable-dev-shm-usage',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding'
+            ],
+        },
+    });
+}
 
 async function initializeClient() {
     if (isInitializing) {
@@ -107,6 +110,10 @@ async function initializeClient() {
 
     isInitializing = true;
     try {
+        if (!client) {
+            client = createClient();
+            attachClientEventHandlers(client);
+        }
         await client.initialize();
         isInitializing = false;
         return true;
@@ -134,7 +141,10 @@ async function waitForBrowserDisconnect(browser, timeoutMs = BROWSER_CLOSE_TIMEO
 async function destroyClientSafely() {
     isInitializing = false;
     isInitialized = false;
-    const browser = client.pupBrowser;
+    const activeClient = client;
+    if (!activeClient) return;
+
+    const browser = activeClient.pupBrowser;
 
     try {
         if (browser?.isConnected?.()) {
@@ -142,7 +152,7 @@ async function destroyClientSafely() {
         }
 
         await Promise.race([
-            client.destroy(),
+            activeClient.destroy(),
             new Promise((_, reject) =>
                 setTimeout(() => reject(new Error("client.destroy() timeout")), BROWSER_CLOSE_TIMEOUT_MS)
             )
@@ -150,17 +160,22 @@ async function destroyClientSafely() {
     } catch (err) {
         console.warn("[Bot] destroy() gagal atau timeout:", err?.message || err);
         try {
-            if (client.pupBrowser?.isConnected?.()) {
-                await client.pupBrowser.close();
+            if (activeClient.pupBrowser?.isConnected?.()) {
+                await activeClient.pupBrowser.close();
             }
         } catch (_) { /* abaikan error penutupan paksa */ }
     }
 
-    const disconnected = await waitForBrowserDisconnect(client.pupBrowser);
-    if (!disconnected && client.pupBrowser?.isConnected?.()) {
+    const disconnected = await waitForBrowserDisconnect(activeClient.pupBrowser);
+    if (!disconnected && activeClient.pupBrowser?.isConnected?.()) {
         console.warn("[Bot] Browser masih terhubung — memaksa close() akhir.");
-        try { await client.pupBrowser.close(); } catch (_) {}
-        await waitForBrowserDisconnect(client.pupBrowser, 5000);
+        try { await activeClient.pupBrowser.close(); } catch (_) {}
+        await waitForBrowserDisconnect(activeClient.pupBrowser, 5000);
+    }
+
+    activeClient.removeAllListeners();
+    if (client === activeClient) {
+        client = null;
     }
 }
 
@@ -195,7 +210,9 @@ function armReadyWatchdog(source) {
     }, READY_TIMEOUT_MS);
 }
 
-client.on("qr", (qr) => {
+function attachClientEventHandlers(activeClient) {
+activeClient.on("qr", (qr) => {
+    if (activeClient !== client) return;
     console.log("[Bot] 📱 Scan QR Code berikut dengan WhatsApp HP Anda:");
     qrcodeTerminal.generate(qr, { small: true });
     QRCode.toDataURL(qr, (err, url) => {
@@ -207,19 +224,22 @@ client.on("qr", (qr) => {
     });
 });
 
-client.on("loading_screen", (percent, message) => {
+activeClient.on("loading_screen", (percent, message) => {
+    if (activeClient !== client) return;
     console.log(`[Bot] ⌛ Memuat WhatsApp... ${percent}% - ${message}`);
     if (!isInitialized && state.botStatus !== "loading") state.setBotStatus("loading");
     armReadyWatchdog("loading_screen");
 });
 
-client.on("authenticated", () => {
+activeClient.on("authenticated", () => {
+    if (activeClient !== client) return;
     console.log("[Bot] 🔐 Autentikasi berhasil. Menunggu WhatsApp siap...");
     state.setBotStatus("loading");
     armReadyWatchdog("authenticated");
 });
 
-client.on("ready", () => {
+activeClient.on("ready", () => {
+    if (activeClient !== client) return;
     clearReadyWatchdog();
     isRestarting = false;
     isInitializing = false;
@@ -228,7 +248,8 @@ client.on("ready", () => {
     state.setBotStatus("online");
 });
 
-client.on("auth_failure", async (msg) => {
+activeClient.on("auth_failure", async (msg) => {
+    if (activeClient !== client) return;
     clearReadyWatchdog();
     console.error("[Bot] ❌ Gagal autentikasi WhatsApp:", msg);
     state.setBotStatus("offline");
@@ -242,7 +263,8 @@ client.on("auth_failure", async (msg) => {
     scheduleRestart(5000);
 });
 
-client.on("disconnected", async (reason) => {
+activeClient.on("disconnected", async (reason) => {
+    if (activeClient !== client) return;
     clearReadyWatchdog();
     console.log(`[Bot] ⚠️ WhatsApp Client terputus. Alasan: ${reason}`);
     state.setBotStatus("offline");
@@ -336,11 +358,19 @@ function addMessageToHistory(userId, role, text) {
 }
 
 function isSimpleGreeting(text) {
-    return /^(p|ping|halo|hallo|hai|hi|hello|assalamualaikum|assalamu'?alaikum|selamat\s+(pagi|siang|sore|malam))[\s.!?]*$/i.test(text);
+    return /^(p|ping|tes|test|halo|hallo|hai|hi|hello|assalamualaikum|assalamu'?alaikum|selamat\s+(pagi|siang|sore|malam))[\s.!?]*$/i.test(text);
 }
 
 function getSimpleGreetingReply() {
     return "Halo Kak, ada yang bisa kami bantu terkait layanan atau informasi Desa Badau?";
+}
+
+function isVillageIdentityQuestion(text) {
+    return /\b(ini|nama|tentang)\b.*\bdesa\b|\bdesa\s+(apa|mana)\b/i.test(text);
+}
+
+function getVillageIdentityReply() {
+    return "Ini adalah layanan digital resmi Desa Badau, Kecamatan Badau. Kakak bisa bertanya tentang layanan administrasi, perangkat desa, fasilitas desa, lokasi kantor, atau informasi umum Desa Badau.";
 }
 
 function getGeminiFallbackReply(err, body) {
@@ -351,7 +381,8 @@ function getGeminiFallbackReply(err, body) {
     return null;
 }
 
-client.on("message", async (message) => {
+activeClient.on("message", async (message) => {
+    if (activeClient !== client) return;
     try {
         if (message.isGroup || message.from.includes("@g.us")) return;
         if (message.from === "status@broadcast") return;
@@ -374,6 +405,14 @@ client.on("message", async (message) => {
             addMessageToHistory(message.from, "model", greetingReply);
             await message.reply(greetingReply);
             console.log(`[Bot] Balasan sapaan terkirim ke ${message.from}`);
+            return;
+        }
+
+        if (isVillageIdentityQuestion(body)) {
+            const identityReply = getVillageIdentityReply();
+            addMessageToHistory(message.from, "model", identityReply);
+            await message.reply(identityReply);
+            console.log(`[Bot] Balasan identitas desa terkirim ke ${message.from}`);
             return;
         }
 
@@ -469,6 +508,7 @@ ${knowledgeText}`;
         }
     }
 });
+}
 
 function initializeBot(socketIoParam) {
     io = socketIoParam;
