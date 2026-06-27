@@ -16,6 +16,9 @@ function getGenAI() {
 
 function describeGeminiError(err) {
     const msg = err?.message || String(err);
+    if (isGeminiRecitationError(err)) {
+        return 'Respons Gemini diblokir karena RECITATION. Bot akan memakai balasan fallback.';
+    }
     if (msg.includes('404') || msg.includes('not found')) {
         return `Model "${GEMINI_MODEL}" tidak tersedia. Periksa nama model di .env (GEMINI_MODEL=gemini-3.1-flash-lite).`;
     }
@@ -23,6 +26,11 @@ function describeGeminiError(err) {
         return `Kuota API habis untuk model ${GEMINI_MODEL}. Reset kuota tengah malam Waktu Pasifik (~15:00-16:00 WIB).`;
     }
     return msg;
+}
+
+function isGeminiRecitationError(err) {
+    const msg = err?.message || String(err);
+    return msg.includes('RECITATION') || msg.includes('recitation');
 }
 
 function extractJsonFromGeminiResponse(text) {
@@ -36,5 +44,6 @@ module.exports = {
     DATA_PARSER_SYSTEM_INSTRUCTION,
     getGenAI,
     describeGeminiError,
+    isGeminiRecitationError,
     extractJsonFromGeminiResponse
 };

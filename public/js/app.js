@@ -124,10 +124,14 @@ function initSocket() {
     if (socket) return; // Mencegah inisialisasi ganda
     
     socket = io();
+
+    socket.on('connect', () => {
+        refreshStatusSnapshot();
+    });
     
     // Dengarkan Perubahan Status Bot
     socket.on('bot_status', (data) => {
-        updateBotStatusUI(data.status, data.qr);
+        updateBotStatusUI(normalizeBotStatus(data.status), data.qr);
     });
     
     // Dengarkan Perubahan AI Toggle
@@ -140,6 +144,30 @@ function initSocket() {
         console.warn('Socket terputus dari backend.');
         updateBotStatusUI('offline');
     });
+}
+
+async function refreshStatusSnapshot() {
+    if (!isAuthenticated) return;
+
+    try {
+        const response = await fetch('/api/status');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        updateBotStatusUI(normalizeBotStatus(data.status), data.qr);
+        aiToggle.checked = !!data.aiEnabled;
+        updateAiToggleText(!!data.aiEnabled);
+    } catch (err) {
+        console.warn('Gagal mengambil snapshot status terbaru:', err);
+    }
+}
+
+function normalizeBotStatus(status) {
+    if (status === 'ready') return 'online';
+    if (status === 'authenticated' || status === 'initializing') return 'loading';
+    if (status === 'disconnected' || status === 'auth_failure' || status === 'logout') return 'offline';
+    if (status === 'online' || status === 'qr' || status === 'loading' || status === 'offline') return status;
+    return 'offline';
 }
 
 // --- Logika Update UI Status Bot ---

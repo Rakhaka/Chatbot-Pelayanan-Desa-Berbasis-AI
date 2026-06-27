@@ -31,6 +31,14 @@ class SharedState extends EventEmitter {
         }
         this.emit('ai_change', enabled);
     }
+
+    getSnapshot() {
+        return {
+            status: this.botStatus,
+            qr: this.qrCode,
+            aiEnabled: this.aiEnabled
+        };
+    }
 }
 
 module.exports = new SharedState();

@@ -71,11 +71,7 @@ app.post('/api/logout', (req, res) => {
 });
 
 app.get('/api/status', requireAuth, (req, res) => {
-    res.json({
-        status: state.botStatus,
-        qr: state.qrCode,
-        aiEnabled: state.aiEnabled
-    });
+    res.json(state.getSnapshot());
 });
 
 app.post('/api/toggle-bot', requireAuth, (req, res) => {
@@ -145,12 +141,13 @@ Perbarui data JSON di atas sesuai perintah admin. Keluarkan HANYA JSON hasil akh
 });
 
 io.on('connection', (socket) => {
+    const snapshot = state.getSnapshot();
     socket.emit('bot_status', {
-        status: state.botStatus,
-        qr: state.qrCode
+        status: snapshot.status,
+        qr: snapshot.qr
     });
     socket.emit('ai_toggle', {
-        enabled: state.aiEnabled
+        enabled: snapshot.aiEnabled
     });
 });
 
@@ -163,9 +160,10 @@ function startServer() {
             // Heartbeat: Sinkronisasi status Socket.IO ke frontend secara berkala setiap 5 detik
             setInterval(() => {
                 if (state.io) {
+                    const snapshot = state.getSnapshot();
                     state.io.emit('bot_status', {
-                        status: state.botStatus,
-                        qr: state.qrCode
+                        status: snapshot.status,
+                        qr: snapshot.qr
                     });
                 }
             }, 5000);

@@ -4,11 +4,12 @@ const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
 const state = require("./state");
-const { GEMINI_MODEL, getGenAI, describeGeminiError } = require("./gemini");
+const { GEMINI_MODEL, getGenAI, describeGeminiError, isGeminiRecitationError } = require("./gemini");
 const { readKnowledgeText } = require("./knowledge");
 
 const BROWSER_CLOSE_TIMEOUT_MS = 15000;
 const BROWSER_POLL_INTERVAL_MS = 200;
+const READY_TIMEOUT_MS = 90000;
 
 // =====================================================================
 // Guard: Tangkap error Puppeteer non-fatal agar Express server tidak mati
@@ -72,6 +73,7 @@ const MAX_HISTORY_LENGTH = 8; // Batasi ingatan maksimal 8 pesan (4 tanya-jawab)
 let isInitializing = false;
 let isInitialized = false;
 let isRestarting = false;
+let readyWatchdog = null;
 let io = null;
 
 const client = new Client({
@@ -84,7 +86,6 @@ const client = new Client({
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--single-process',
             '--disable-gpu',
             '--disable-dev-shm-usage',
             '--disable-background-timer-throttling',
@@ -107,7 +108,6 @@ async function initializeClient() {
     isInitializing = true;
     try {
         await client.initialize();
-        isInitialized = true;
         isInitializing = false;
         return true;
     } catch (err) {
@@ -168,6 +168,33 @@ function scheduleRestart(delayMs) {
     setTimeout(() => restartBot(), delayMs);
 }
 
+function clearReadyWatchdog() {
+    if (readyWatchdog) {
+        clearTimeout(readyWatchdog);
+        readyWatchdog = null;
+    }
+}
+
+function armReadyWatchdog(source) {
+    clearReadyWatchdog();
+    readyWatchdog = setTimeout(async () => {
+        if (isInitialized) return;
+
+        console.warn(`[Bot] WhatsApp belum ready setelah ${READY_TIMEOUT_MS / 1000} detik sejak ${source}. Mencoba restart koneksi...`);
+        isRestarting = true;
+        state.setBotStatus("offline");
+
+        try {
+            await destroyClientSafely();
+        } catch (err) {
+            console.warn("[Bot] Gagal destroy saat ready watchdog:", err?.message || err);
+        }
+
+        console.warn("[Bot] Jika kondisi ini berulang, sesi WhatsApp lokal mungkin perlu scan QR ulang.");
+        scheduleRestart(5000);
+    }, READY_TIMEOUT_MS);
+}
+
 client.on("qr", (qr) => {
     console.log("[Bot] 📱 Scan QR Code berikut dengan WhatsApp HP Anda:");
     qrcodeTerminal.generate(qr, { small: true });
@@ -182,15 +209,18 @@ client.on("qr", (qr) => {
 
 client.on("loading_screen", (percent, message) => {
     console.log(`[Bot] ⌛ Memuat WhatsApp... ${percent}% - ${message}`);
-    if (state.botStatus !== "loading") state.setBotStatus("loading");
+    if (!isInitialized && state.botStatus !== "loading") state.setBotStatus("loading");
+    armReadyWatchdog("loading_screen");
 });
 
 client.on("authenticated", () => {
     console.log("[Bot] 🔐 Autentikasi berhasil. Menunggu WhatsApp siap...");
     state.setBotStatus("loading");
+    armReadyWatchdog("authenticated");
 });
 
 client.on("ready", () => {
+    clearReadyWatchdog();
     isRestarting = false;
     isInitializing = false;
     isInitialized = true;
@@ -199,6 +229,7 @@ client.on("ready", () => {
 });
 
 client.on("auth_failure", async (msg) => {
+    clearReadyWatchdog();
     console.error("[Bot] ❌ Gagal autentikasi WhatsApp:", msg);
     state.setBotStatus("offline");
     cleanSessionFolder();
@@ -212,6 +243,7 @@ client.on("auth_failure", async (msg) => {
 });
 
 client.on("disconnected", async (reason) => {
+    clearReadyWatchdog();
     console.log(`[Bot] ⚠️ WhatsApp Client terputus. Alasan: ${reason}`);
     state.setBotStatus("offline");
 
@@ -236,7 +268,15 @@ client.on("disconnected", async (reason) => {
 function restartBot() {
     console.log("[Bot] 🔄 Memulai ulang koneksi WhatsApp...");
     state.setBotStatus("loading");
-    initializeClient().catch((err) => {
+    armReadyWatchdog("restartBot");
+    initializeClient().then((started) => {
+        if (!started && isInitialized) {
+            clearReadyWatchdog();
+            console.warn("[Bot] Restart diminta, tetapi client masih aktif. Mengembalikan status online.");
+            isRestarting = false;
+            state.setBotStatus("online");
+        }
+    }).catch((err) => {
         if (err.message?.includes("already running")) {
             console.warn("[Bot] ⚠️ Browser masih berjalan dari sesi lama. Menunggu 15 detik lagi...");
             isRestarting = true;
@@ -295,6 +335,22 @@ function addMessageToHistory(userId, role, text) {
     chatHistories.set(userId, sanitized);
 }
 
+function isSimpleGreeting(text) {
+    return /^(p|ping|halo|hallo|hai|hi|hello|assalamualaikum|assalamu'?alaikum|selamat\s+(pagi|siang|sore|malam))[\s.!?]*$/i.test(text);
+}
+
+function getSimpleGreetingReply() {
+    return "Halo Kak, ada yang bisa kami bantu terkait layanan atau informasi Desa Badau?";
+}
+
+function getGeminiFallbackReply(err, body) {
+    if (isGeminiRecitationError(err)) {
+        if (isSimpleGreeting(body)) return getSimpleGreetingReply();
+        return "Mohon maaf Kak, sistem AI sedang membatasi jawaban otomatis untuk pesan tersebut. Bisa tulis ulang pertanyaannya dengan lebih spesifik terkait layanan atau informasi Desa Badau?";
+    }
+    return null;
+}
+
 client.on("message", async (message) => {
     try {
         if (message.isGroup || message.from.includes("@g.us")) return;
@@ -312,6 +368,14 @@ client.on("message", async (message) => {
 
         // Tambahkan pesan user ke riwayat
         addMessageToHistory(message.from, "user", body);
+
+        if (isSimpleGreeting(body)) {
+            const greetingReply = getSimpleGreetingReply();
+            addMessageToHistory(message.from, "model", greetingReply);
+            await message.reply(greetingReply);
+            console.log(`[Bot] Balasan sapaan terkirim ke ${message.from}`);
+            return;
+        }
 
         const knowledgeText = readKnowledgeText();
         const currentLocalTime = new Date().toLocaleString("id-ID", {
@@ -368,6 +432,11 @@ ${knowledgeText}`;
                 if (replyText) break;
             } catch (err) {
                 lastError = err;
+                const fallbackReply = getGeminiFallbackReply(err, body);
+                if (fallbackReply) {
+                    replyText = fallbackReply;
+                    break;
+                }
                 console.warn(`[Bot] ⚠️ Percobaan Gemini ke-${attempt} gagal: ${describeGeminiError(err)}`);
                 if (attempt < MAX_RETRIES) {
                     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -407,9 +476,12 @@ function initializeBot(socketIoParam) {
     isRestarting = false;
     state.setBotStatus("loading");
     console.log("[Bot] 🔄 Menginisialisasi WhatsApp Client...");
+    armReadyWatchdog("initializeBot");
     initializeClient().catch((err) => {
+        clearReadyWatchdog();
         console.error("[Bot] ❌ Inisialisasi pertama gagal:", err.message);
         state.setBotStatus("offline");
+        isRestarting = false;
     });
 }
 
