@@ -74,6 +74,7 @@ let isInitializing = false;
 let isInitialized = false;
 let isRestarting = false;
 let readyWatchdog = null;
+let readyTimeoutCount = 0;
 let io = null;
 let client = null;
 
@@ -195,6 +196,7 @@ function armReadyWatchdog(source) {
     readyWatchdog = setTimeout(async () => {
         if (isInitialized) return;
 
+        readyTimeoutCount += 1;
         console.warn(`[Bot] WhatsApp belum ready setelah ${READY_TIMEOUT_MS / 1000} detik sejak ${source}. Mencoba restart koneksi...`);
         isRestarting = true;
         state.setBotStatus("offline");
@@ -205,14 +207,51 @@ function armReadyWatchdog(source) {
             console.warn("[Bot] Gagal destroy saat ready watchdog:", err?.message || err);
         }
 
+        if (readyTimeoutCount >= 2) {
+            console.warn("[Bot] WhatsApp gagal ready berulang. Membersihkan sesi lokal agar QR baru dibuat.");
+            cleanSessionFolder();
+            readyTimeoutCount = 0;
+        }
+
         console.warn("[Bot] Jika kondisi ini berulang, sesi WhatsApp lokal mungkin perlu scan QR ulang.");
         scheduleRestart(5000);
     }, READY_TIMEOUT_MS);
 }
 
+function restartBot() {
+    console.log("[Bot] Memulai ulang koneksi WhatsApp...");
+    state.setBotStatus("loading");
+    armReadyWatchdog("restartBot");
+    initializeClient().then((started) => {
+        if (!started && isInitialized) {
+            clearReadyWatchdog();
+            console.warn("[Bot] Restart diminta, tetapi client masih aktif. Mengembalikan status online.");
+            isRestarting = false;
+            state.setBotStatus("online");
+        }
+    }).catch((err) => {
+        if (err.message?.includes("already running")) {
+            console.warn("[Bot] Browser masih berjalan dari sesi lama. Menunggu 15 detik lagi...");
+            isRestarting = true;
+            scheduleRestart(15000);
+            return;
+        }
+        if (err.message?.includes("ERR_NAME_NOT_RESOLVED")) {
+            console.warn("[Bot] Tidak ada koneksi internet ke WhatsApp. Coba lagi dalam 15 detik...");
+            isRestarting = true;
+            scheduleRestart(15000);
+            return;
+        }
+        console.error("[Bot] Gagal restart:", err.message);
+        state.setBotStatus("offline");
+        isRestarting = false;
+    });
+}
+
 function attachClientEventHandlers(activeClient) {
 activeClient.on("qr", (qr) => {
     if (activeClient !== client) return;
+    readyTimeoutCount = 0;
     console.log("[Bot] 📱 Scan QR Code berikut dengan WhatsApp HP Anda:");
     qrcodeTerminal.generate(qr, { small: true });
     QRCode.toDataURL(qr, (err, url) => {
@@ -241,6 +280,7 @@ activeClient.on("authenticated", () => {
 activeClient.on("ready", () => {
     if (activeClient !== client) return;
     clearReadyWatchdog();
+    readyTimeoutCount = 0;
     isRestarting = false;
     isInitializing = false;
     isInitialized = true;
